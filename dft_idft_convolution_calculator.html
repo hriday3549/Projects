@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DFT / IDFT / Convolution Calculator</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface: #1e293b;
+            --surface-hover: #334155;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --radius: 12px;
+            --accent2: #22d3ee;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            padding: 2rem 1rem;
+            min-height: 100vh;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background-color: var(--surface);
+            border-radius: var(--radius);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header & Tabs */
+        .header {
+            padding: 2rem;
+            text-align: center;
+            background: linear-gradient(to right, #1e293b, #0f172a);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        #mode-desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            max-width: 600px;
+            margin: 0.25rem auto 0;
+        }
+
+        .tabs {
+            display: flex;
+            flex-wrap: wrap;
+            background-color: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab {
+            flex: 1 1 20%;
+            min-width: 140px;
+            padding: 0.9rem 0.5rem;
+            text-align: center;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            transition: all 0.3s ease;
+            border-bottom: 3px solid transparent;
+        }
+
+        .tab:hover {
+            background-color: var(--surface-hover);
+            color: var(--text-main);
+        }
+
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            background-color: rgba(99, 102, 241, 0.1);
+        }
+
+        /* Content Area */
+        .content {
+            padding: 2rem;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        label {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        input[type="number"], input[type="text"] {
+            background-color: #0f172a;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="number"]:focus, input[type="text"]:focus {
+            border-color: var(--primary);
+        }
+
+        .points-input {
+            width: 80px;
+        }
+
+        /* Sequence sections */
+        .seq-section {
+            margin-bottom: 1.25rem;
+        }
+
+        .seq-section h4 {
+            color: var(--accent2);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-bottom: 0.6rem;
+        }
+
+        /* Data Grid */
+        .data-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .data-row {
+            display: grid;
+            grid-template-columns: 60px 1fr 20px 1fr 30px;
+            align-items: center;
+            gap: 0.5rem;
+            background-color: #0f172a;
+            padding: 0.6rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .data-row-real {
+            display: grid;
+            grid-template-columns: 60px 1fr;
+            align-items: center;
+            gap: 0.5rem;
+            background-color: #0f172a;
+            padding: 0.6rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .data-row span, .data-row-real span {
+            text-align: center;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .data-row .val-input, .data-row-real .val-input {
+            width: 100%;
+        }
+
+        /* Buttons */
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            width: 100%;
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--surface-hover);
+        }
+
+        /* Results Area */
+        .results-section {
+            margin-top: 2rem;
+            display: none;
+            border-top: 1px solid var(--border);
+            padding-top: 2rem;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+
+        .result-table th, .result-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .result-table th {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .result-table td {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.95rem;
+        }
+
+        .magnitude-phase {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        /* Matrix tables */
+        .matrix-table {
+            border-collapse: collapse;
+            margin: 0.75rem 0 1.25rem;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.8rem;
+        }
+
+        .matrix-table th, .matrix-table td {
+            border: 1px solid var(--border);
+            padding: 0.4rem 0.65rem;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .matrix-table th {
+            background-color: rgba(99, 102, 241, 0.12);
+            color: var(--accent2);
+            font-weight: 600;
+        }
+
+        .matrix-eq {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin: 0.5rem 0 0.75rem;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        /* Step blocks */
+        details.step-group {
+            margin-top: 1rem;
+            background-color: #0f172a;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+        }
+
+        details.step-group summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: var(--primary);
+            outline: none;
+        }
+
+        .step-block {
+            margin: 1rem 0;
+            padding: 0.75rem;
+            background-color: var(--surface);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow-x: auto;
+        }
+
+        .step-formula {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            margin: 0.2rem 0;
+        }
+
+        .step-result {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            color: var(--accent2);
+            font-weight: 600;
+            margin-top: 0.35rem;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .note {
+            background-color: rgba(34, 211, 238, 0.08);
+            border: 1px solid rgba(34, 211, 238, 0.3);
+            color: var(--text-main);
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+        }
+
+        h3.section-title {
+            margin: 1.5rem 0 0.25rem;
+            font-size: 1.05rem;
+            color: var(--text-main);
+        }
+
+        @media (max-width: 600px) {
+            .data-row {
+                grid-template-columns: 40px 1fr 10px 1fr 20px;
+                font-size: 0.9rem;
+            }
+            .data-row-real {
+                grid-template-columns: 40px 1fr;
+                font-size: 0.9rem;
+            }
+            .content {
+                padding: 1rem;
+            }
+            .result-table th, .result-table td {
+                padding: 0.5rem;
+            }
+            .tab {
+                flex: 1 1 45%;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>DFT / IDFT &amp; Convolution Calculator</h1>
+        <p id="mode-desc">Calculate DFT or IDFT easily with complex numbers</p>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" id="tab-dft" onclick="switchMode('dft')">DFT (Forward)</div>
+        <div class="tab" id="tab-idft" onclick="switchMode('idft')">IDFT (Inverse)</div>
+        <div class="tab" id="tab-circular" onclick="switchMode('circular')">Circular Convolution</div>
+        <div class="tab" id="tab-linear" onclick="switchMode('linear')">Linear Convolution</div>
+        <div class="tab" id="tab-linear-circular" onclick="switchMode('linear-circular')">Linear via Circular</div>
+        <div class="tab" id="tab-overlap-add" onclick="switchMode('overlap-add')">Overlap-Add</div>
+        <div class="tab" id="tab-overlap-save" onclick="switchMode('overlap-save')">Overlap-Save</div>
+    </div>
+
+    <div class="content">
+        <div class="controls" id="controls-single">
+            <div class="control-group">
+                <label for="point-count">Number of points (N):</label>
+                <input type="number" id="point-count" class="points-input" value="4" min="2" max="16" onchange="generateInputs()">
+            </div>
+            <button class="btn btn-secondary" style="width: auto;" onclick="clearInputs()">Clear All</button>
+        </div>
+
+        <div class="controls" id="controls-double" style="display:none;">
+            <div class="control-group">
+                <label for="n1-count">Length of x[n] (N1):</label>
+                <input type="number" id="n1-count" class="points-input" value="3" min="1" max="10" onchange="generateInputs()">
+            </div>
+            <div class="control-group">
+                <label for="n2-count">Length of h[n] (N2):</label>
+                <input type="number" id="n2-count" class="points-input" value="3" min="1" max="10" onchange="generateInputs()">
+            </div>
+            <div class="control-group" id="block-size-group" style="display:none;">
+                <label for="block-size" id="block-size-label">Block size (L):</label>
+                <input type="number" id="block-size" class="points-input" value="3" min="1" max="20">
+            </div>
+            <button class="btn btn-secondary" style="width: auto;" onclick="clearInputs()">Clear All</button>
+        </div>
+
+        <div id="grid-container">
+            <div class="seq-section" id="section-x">
+                <h4 id="label-x">x[n]</h4>
+                <div class="data-grid" id="grid-x"></div>
+            </div>
+            <div class="seq-section" id="section-h" style="display:none;">
+                <h4 id="label-h">h[n]</h4>
+                <div class="data-grid" id="grid-h"></div>
+            </div>
+        </div>
+
+        <button class="btn" id="calc-btn" onclick="calculate()">Calculate DFT</button>
+
+        <div class="results-section" id="results-section">
+            <h3 class="section-title" id="result-title">Results</h3>
+            <div id="note-container"></div>
+            <div style="overflow-x: auto;">
+                <table class="result-table">
+                    <thead>
+                        <tr id="result-head-row">
+                            <th id="th-index">k</th>
+                            <th>Result</th>
+                            <th id="th-magphase">Magnitude ∠ Phase</th>
+                        </tr>
+                    </thead>
+                    <tbody id="result-body">
+                    </tbody>
+                </table>
+            </div>
+
+            <details class="step-group" open>
+                <summary>Matrix used &amp; step-by-step calculation</summary>
+                <div id="matrix-container"></div>
+                <div id="steps-container"></div>
+            </details>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentMode = 'dft'; // 'dft' | 'idft' | 'circular' | 'linear' | 'linear-circular'
+
+    // ---------- Complex Number Class ----------
+    class Complex {
+        constructor(re, im) {
+            this.re = re;
+            this.im = im;
+        }
+        add(other) { return new Complex(this.re + other.re, this.im + other.im); }
+        mul(other) {
+            return new Complex(
+                this.re * other.re - this.im * other.im,
+                this.re * other.im + this.im * other.re
+            );
+        }
+        get mag() { return Math.sqrt(this.re * this.re + this.im * this.im); }
+        get phase() { return Math.atan2(this.im, this.re); }
+    }
+
+    function formatNumber(num) {
+        if (Math.abs(num) < 1e-7) return "0";
+        return parseFloat(num.toFixed(4)).toString();
+    }
+
+    function formatComplex(c) {
+        const reStr = formatNumber(c.re);
+        const imStr = formatNumber(c.im);
+        if (imStr.startsWith('-')) {
+            return `${reStr} - ${imStr.substring(1)}j`;
+        }
+        return `${reStr} + ${imStr}j`;
+    }
+
+    // ---------- Mode / UI plumbing ----------
+    const modeMeta = {
+        'dft':             { desc: 'Compute the forward DFT: X[k] = Σ x[n]·W_N^{kn}, shown as a matrix multiplication X = W·x.', btn: 'Calculate DFT', title: 'DFT Results (Frequency Domain)', idx: 'k', out: 'X' },
+        'idft':            { desc: 'Compute the inverse DFT: x[n] = (1/N) Σ X[k]·W_N^{-kn}, shown as a matrix multiplication x = W⁻¹·X.', btn: 'Calculate IDFT', title: 'IDFT Results (Time Domain)', idx: 'n', out: 'x' },
+        'circular':        { desc: 'Compute circular convolution y[n] = x[n] ⊛ h[n] using the circulant matrix built from h[n].', btn: 'Calculate Circular Convolution', title: 'Circular Convolution Result y[n] = x[n] ⊛ h[n]', idx: 'n', out: 'y' },
+        'linear':           { desc: 'Compute linear convolution y[n] = x[n] * h[n] using the Toeplitz matrix built from h[n].', btn: 'Calculate Linear Convolution', title: 'Linear Convolution Result y[n] = x[n] * h[n]', idx: 'n', out: 'y' },
+        'linear-circular': { desc: 'Compute linear convolution via circular convolution: zero-pad x[n] and h[n] to length N1+N2-1, then circularly convolve.', btn: 'Calculate (Linear via Circular)', title: 'Linear Convolution via Circular Convolution', idx: 'n', out: 'y' },
+        'overlap-add':     { desc: 'Block convolution: split x[n] into blocks of length L, linearly convolve each block with h[n] (Toeplitz matrix method), then shift and add the overlapping results.', btn: 'Calculate Overlap-Add', title: 'Linear Convolution via Overlap-Add', idx: 'n', out: 'y' },
+        'overlap-save':    { desc: 'Block convolution: form overlapping blocks of x[n] of length N (overlap = M-1), circularly convolve each with h[n] (circulant matrix method), discard the first M-1 corrupted samples of each block, and concatenate the rest.', btn: 'Calculate Overlap-Save', title: 'Linear Convolution via Overlap-Save', idx: 'n', out: 'y' }
+    };
+
+    function switchMode(mode) {
+        currentMode = mode;
+        ['dft','idft','circular','linear','linear-circular','overlap-add','overlap-save'].forEach(m => {
+            document.getElementById('tab-' + m).classList.toggle('active', m === mode);
+        });
+        const meta = modeMeta[mode];
+        document.getElementById('mode-desc').innerText = meta.desc;
+        document.getElementById('calc-btn').innerText = meta.btn;
+        document.getElementById('results-section').classList.remove('active');
+
+        if (mode === 'overlap-add') {
+            document.getElementById('block-size-label').innerText = 'Block size L (x samples per block):';
+            document.getElementById('block-size').value = 3;
+        } else if (mode === 'overlap-save') {
+            document.getElementById('block-size-label').innerText = 'Block size N (circular length, N ≥ M):';
+            document.getElementById('block-size').value = 6;
+        }
+        generateInputs();
+    }
+
+    function makeComplexRow(prefix, i) {
+        const row = document.createElement('div');
+        row.className = 'data-row';
+        row.innerHTML = `
+            <span>${prefix}[${i}] =</span>
+            <input type="number" class="val-input re-input" placeholder="Real" step="any" value="0">
+            <span>+</span>
+            <input type="number" class="val-input im-input" placeholder="Imag" step="any" value="0">
+            <span>j</span>
+        `;
+        return row;
+    }
+
+    function makeRealRow(seqClass, prefix, i) {
+        const row = document.createElement('div');
+        row.className = 'data-row-real';
+        row.innerHTML = `
+            <span>${prefix}[${i}] =</span>
+            <input type="number" class="val-input ${seqClass}-input" step="any" value="0">
+        `;
+        return row;
+    }
+
+    function generateInputs() {
+        const gridX = document.getElementById('grid-x');
+        const gridH = document.getElementById('grid-h');
+        gridX.innerHTML = '';
+        gridH.innerHTML = '';
+
+        if (currentMode === 'dft' || currentMode === 'idft') {
+            document.getElementById('section-h').style.display = 'none';
+            document.getElementById('controls-single').style.display = 'flex';
+            document.getElementById('controls-double').style.display = 'none';
+            const n = parseInt(document.getElementById('point-count').value) || 4;
+            const prefix = currentMode === 'dft' ? 'x' : 'X';
+            document.getElementById('label-x').innerText = currentMode === 'dft' ? 'x[n] (time domain, complex)' : 'X[k] (frequency domain, complex)';
+            for (let i = 0; i < n; i++) gridX.appendChild(makeComplexRow(prefix, i));
+        } else if (currentMode === 'circular') {
+            document.getElementById('section-h').style.display = 'block';
+            document.getElementById('controls-single').style.display = 'flex';
+            document.getElementById('controls-double').style.display = 'none';
+            document.getElementById('label-x').innerText = 'x[n]';
+            document.getElementById('label-h').innerText = 'h[n]';
+            const n = parseInt(document.getElementById('point-count').value) || 4;
+            for (let i = 0; i < n; i++) {
+                gridX.appendChild(makeRealRow('x', 'x', i));
+                gridH.appendChild(makeRealRow('h', 'h', i));
+            }
+        } else {
+            // linear, linear-circular, overlap-add, overlap-save
+            document.getElementById('section-h').style.display = 'block';
+            document.getElementById('controls-single').style.display = 'none';
+            document.getElementById('controls-double').style.display = 'flex';
+            document.getElementById('label-x').innerText = 'x[n]';
+            document.getElementById('label-h').innerText = 'h[n]';
+            const isOverlap = (currentMode === 'overlap-add' || currentMode === 'overlap-save');
+            document.getElementById('block-size-group').style.display = isOverlap ? 'flex' : 'none';
+            const n1 = parseInt(document.getElementById('n1-count').value) || 3;
+            const n2 = parseInt(document.getElementById('n2-count').value) || 3;
+            for (let i = 0; i < n1; i++) gridX.appendChild(makeRealRow('x', 'x', i));
+            for (let i = 0; i < n2; i++) gridH.appendChild(makeRealRow('h', 'h', i));
+        }
+        document.getElementById('results-section').classList.remove('active');
+    }
+
+    function clearInputs() {
+        document.querySelectorAll('.re-input, .im-input, .x-input, .h-input').forEach(input => input.value = '0');
+        document.getElementById('results-section').classList.remove('active');
+    }
+
+    // ---------- Matrix helpers ----------
+    function dftMatrix(N, inverse) {
+        const M = [];
+        for (let k = 0; k < N; k++) {
+            const row = [];
+            for (let n = 0; n < N; n++) {
+                const sign = inverse ? 1 : -1;
+                const theta = sign * 2 * Math.PI * k * n / N;
+                let val = new Complex(Math.cos(theta), Math.sin(theta));
+                if (inverse) { val = new Complex(val.re / N, val.im / N); }
+                row.push(val);
+            }
+            M.push(row);
+        }
+        return M;
+    }
+
+    // Circulant matrix from kernel h, size N x N: C[i][j] = h[(i-j+N)%N]
+    function circulantMatrix(h, N) {
+        const M = [];
+        for (let i = 0; i < N; i++) {
+            const row = [];
+            for (let j = 0; j < N; j++) {
+                row.push(h[((i - j) % N + N) % N]);
+            }
+            M.push(row);
+        }
+        return M;
+    }
+
+    // Toeplitz (convolution) matrix from kernel h (length N2), producing L x N1: H[i][j] = h[i-j] if in range else 0
+    function toeplitzMatrix(h, N1, N2, L) {
+        const M = [];
+        for (let i = 0; i < L; i++) {
+            const row = [];
+            for (let j = 0; j < N1; j++) {
+                const idx = i - j;
+                row.push((idx >= 0 && idx < N2) ? h[idx] : 0);
+            }
+            M.push(row);
+        }
+        return M;
+    }
+
+    function renderMatrixTable(matrix, isComplex, rowLabelFn, colLabelFn, cornerLabel) {
+        const rows = matrix.length, cols = matrix[0].length;
+        let html = `<div style="overflow-x:auto;"><table class="matrix-table"><thead><tr><th>${cornerLabel || ''}</th>`;
+        for (let j = 0; j < cols; j++) html += `<th>${colLabelFn(j)}</th>`;
+        html += '</tr></thead><tbody>';
+        for (let i = 0; i < rows; i++) {
+            html += `<tr><th>${rowLabelFn(i)}</th>`;
+            for (let j = 0; j < cols; j++) {
+                const v = matrix[i][j];
+                html += `<td>${isComplex ? formatComplex(v) : formatNumber(v)}</td>`;
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table></div>';
+        return html;
+    }
+
+    // Dot-product step block: out[idx] = Σ coeffRow[k]·vector[k]
+    function stepBlockComplex(outSym, idx, coeffRow, vector) {
+        const N = coeffRow.length;
+        const terms = [];
+        const products = [];
+        let sum = new Complex(0, 0);
+        for (let n = 0; n < N; n++) {
+            const p = coeffRow[n].mul(vector[n]);
+            sum = sum.add(p);
+            terms.push(`(${formatComplex(vector[n])})·(${formatComplex(coeffRow[n])})`);
+            products.push(`(${formatComplex(p)})`);
+        }
+        const html = `
+            <div class="step-block">
+                <div class="step-formula">${outSym}[${idx}] = ${terms.join(' + ')}</div>
+                <div class="step-formula">      = ${products.join(' + ')}</div>
+                <div class="step-result">${outSym}[${idx}] = ${formatComplex(sum)}</div>
+            </div>`;
+        return { html, value: sum };
+    }
+
+    function stepBlockReal(outSym, idx, coeffRow, vector) {
+        const N = coeffRow.length;
+        const terms = [];
+        const products = [];
+        let sum = 0;
+        for (let n = 0; n < N; n++) {
+            const p = coeffRow[n] * vector[n];
+            sum += p;
+            terms.push(`(${formatNumber(vector[n])})·(${formatNumber(coeffRow[n])})`);
+            products.push(`(${formatNumber(p)})`);
+        }
+        const html = `
+            <div class="step-block">
+                <div class="step-formula">${outSym}[${idx}] = ${terms.join(' + ')}</div>
+                <div class="step-formula">      = ${products.join(' + ')}</div>
+                <div class="step-result">${outSym}[${idx}] = ${formatNumber(sum)}</div>
+            </div>`;
+        return { html, value: sum };
+    }
+
+    // ---------- Calculation dispatch ----------
+    function calculate() {
+        switch (currentMode) {
+            case 'dft': calculateDFT(false); break;
+            case 'idft': calculateDFT(true); break;
+            case 'circular': calculateCircular(); break;
+            case 'linear': calculateLinear(); break;
+            case 'linear-circular': calculateLinearViaCircular(); break;
+            case 'overlap-add': calculateOverlapAdd(); break;
+            case 'overlap-save': calculateOverlapSave(); break;
+        }
+    }
+
+    function readComplexSeq() {
+        const reInputs = document.querySelectorAll('#grid-x .re-input');
+        const imInputs = document.querySelectorAll('#grid-x .im-input');
+        const seq = [];
+        for (let i = 0; i < reInputs.length; i++) {
+            seq.push(new Complex(parseFloat(reInputs[i].value) || 0, parseFloat(imInputs[i].value) || 0));
+        }
+        return seq;
+    }
+
+    function readRealSeq(cls) {
+        const inputs = document.querySelectorAll('#grid-' + (cls === 'x' ? 'x' : 'h') + ' .' + cls + '-input');
+        const seq = [];
+        inputs.forEach(inp => seq.push(parseFloat(inp.value) || 0));
+        return seq;
+    }
+
+    function calculateDFT(isInverse) {
+        const x = readComplexSeq();
+        const N = x.length;
+        const W = dftMatrix(N, isInverse);
+        const outSym = isInverse ? 'x' : 'X';
+        const inSym = isInverse ? 'X' : 'x';
+
+        const outputs = [];
+        let stepsHtml = '';
+        for (let k = 0; k < N; k++) {
+            const { html, value } = stepBlockComplex(outSym, k, W[k], x);
+            outputs.push(value);
+            stepsHtml += html;
+        }
+
+        const matrixHtml =
+            `<div class="matrix-eq">${outSym} = W · ${inSym}&nbsp;&nbsp; where W[${isInverse ? 'n' : 'k'}][${isInverse ? 'k' : 'n'}] = ${isInverse ? '(1/N)·e^{+j2π k n / N}' : 'e^{-j2π k n / N}'}</div>` +
+            renderMatrixTable(W, true, i => `${isInverse ? 'n=' : 'k='}${i}`, j => `${isInverse ? 'k=' : 'n='}${j}`, isInverse ? 'n \\ k' : 'k \\ n');
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML = '';
+        displayFinalResults(outputs, true, outSym, isInverse ? 'n' : 'k');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function calculateCircular() {
+        const x = readRealSeq('x');
+        const h = readRealSeq('h');
+        const N = Math.max(x.length, h.length);
+        while (x.length < N) x.push(0);
+        while (h.length < N) h.push(0);
+
+        const C = circulantMatrix(h, N);
+        const outputs = [];
+        let stepsHtml = '';
+        for (let i = 0; i < N; i++) {
+            const { html, value } = stepBlockReal('y', i, C[i], x);
+            outputs.push(value);
+            stepsHtml += html;
+        }
+
+        const matrixHtml =
+            `<div class="matrix-eq">y = C_h · x&nbsp;&nbsp; where C_h[n][m] = h[(n − m) mod N]</div>` +
+            renderMatrixTable(C, false, i => `n=${i}`, j => `m=${j}`, 'n \\ m');
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML = '';
+        displayFinalResults(outputs, false, 'y', 'n');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function calculateLinear() {
+        const x = readRealSeq('x');
+        const h = readRealSeq('h');
+        const N1 = x.length, N2 = h.length;
+        const L = N1 + N2 - 1;
+
+        const H = toeplitzMatrix(h, N1, N2, L);
+        const outputs = [];
+        let stepsHtml = '';
+        for (let i = 0; i < L; i++) {
+            const { html, value } = stepBlockReal('y', i, H[i], x);
+            outputs.push(value);
+            stepsHtml += html;
+        }
+
+        const matrixHtml =
+            `<div class="matrix-eq">y = H · x&nbsp;&nbsp; where H is the (N1+N2-1) × N1 Toeplitz matrix built from h[n], H[n][m] = h[n − m]</div>` +
+            renderMatrixTable(H, false, i => `n=${i}`, j => `x[${j}]`, 'y[n] \\ x[m]');
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML =
+            `<div class="note">Output length L = N1 + N2 − 1 = ${N1} + ${N2} − 1 = ${L}.</div>`;
+        displayFinalResults(outputs, false, 'y', 'n');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function calculateLinearViaCircular() {
+        const x = readRealSeq('x');
+        const h = readRealSeq('h');
+        const N1 = x.length, N2 = h.length;
+        const L = N1 + N2 - 1;
+
+        const xp = x.slice(); while (xp.length < L) xp.push(0);
+        const hp = h.slice(); while (hp.length < L) hp.push(0);
+
+        const C = circulantMatrix(hp, L);
+        const outputs = [];
+        let stepsHtml = '';
+        for (let i = 0; i < L; i++) {
+            const { html, value } = stepBlockReal('y', i, C[i], xp);
+            outputs.push(value);
+            stepsHtml += html;
+        }
+
+        const matrixHtml =
+            `<div class="matrix-eq">Zero-padded: x_p[n] = [${xp.map(formatNumber).join(', ')}],&nbsp; h_p[n] = [${hp.map(formatNumber).join(', ')}]</div>` +
+            `<div class="matrix-eq">y = C_(h_p) · x_p&nbsp;&nbsp; (N-point circular convolution with N = L = ${L}, so no wrap-around energy is lost — result equals linear convolution)</div>` +
+            renderMatrixTable(C, false, i => `n=${i}`, j => `m=${j}`, 'n \\ m');
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML =
+            `<div class="note">x[n] (length ${N1}) and h[n] (length ${N2}) are zero-padded to L = N1 + N2 − 1 = ${L}, then circularly convolved — this is algebraically identical to linear convolution.</div>`;
+        displayFinalResults(outputs, false, 'y', 'n');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function calculateOverlapAdd() {
+        const x = readRealSeq('x');
+        const h = readRealSeq('h');
+        const Nx = x.length, M = h.length;
+        let L = parseInt(document.getElementById('block-size').value) || 3;
+        if (L < 1) L = 1;
+        const numBlocks = Math.ceil(Nx / L);
+
+        const xPad = x.slice();
+        while (xPad.length < numBlocks * L) xPad.push(0);
+
+        const blockOutLen = L + M - 1;
+        const outFullLen = (numBlocks - 1) * L + blockOutLen;
+        const yFull = new Array(outFullLen).fill(0);
+
+        // Same Toeplitz matrix (L x M kernel) applies to every block since every block has length L
+        const Hmat = toeplitzMatrix(h, L, M, blockOutLen);
+
+        let matrixHtml =
+            `<div class="matrix-eq">x[n] (length ${Nx}) is split into ${numBlocks} block${numBlocks > 1 ? 's' : ''} of length L=${L} (last block zero-padded). Each block x_b[n] is linearly convolved with h[n] via y_b = H · x_b, using the same (L+M-1) × L Toeplitz matrix H for every block:</div>` +
+            renderMatrixTable(Hmat, false, i => `n=${i}`, j => `x_b[${j}]`, 'H (block Toeplitz)');
+
+        let stepsHtml = '';
+        for (let b = 0; b < numBlocks; b++) {
+            const blockX = xPad.slice(b * L, b * L + L);
+            let blockStepsHtml = `<div class="step-formula">Block ${b}: x_${b}[n] = [${blockX.map(formatNumber).join(', ')}]  (x samples n = ${b * L}..${b * L + L - 1}${(b * L + L > Nx) ? ', zero-padded beyond n=' + (Nx - 1) : ''})</div>`;
+            for (let i = 0; i < blockOutLen; i++) {
+                const { html, value } = stepBlockReal(`y_${b}`, i, Hmat[i], blockX);
+                blockStepsHtml += html;
+                yFull[b * L + i] += value;
+            }
+            stepsHtml += `<details class="step-group" open><summary>Block ${b} — linear convolution with h[n] (Toeplitz matrix method)</summary>${blockStepsHtml}</details>`;
+        }
+
+        let comboHtml = '<div class="step-block"><div class="step-formula">Overlap-Add combination — each block\'s (L+M-1)-length result is shifted by b·L samples and added into the output; the last M-1 samples of block b overlap the first M-1 samples of block b+1:</div>';
+        for (let b = 0; b < numBlocks; b++) {
+            comboHtml += `<div class="step-formula">Block ${b} result placed at output samples n = ${b * L}..${b * L + blockOutLen - 1}</div>`;
+        }
+        comboHtml += '</div>';
+        stepsHtml += comboHtml;
+
+        const y = yFull.slice(0, Nx + M - 1);
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML =
+            `<div class="note">Output length = Nx + M − 1 = ${Nx} + ${M} − 1 = ${Nx + M - 1}. Each block produces L+M−1 = ${blockOutLen} samples; consecutive blocks overlap by M−1 = ${M - 1} samples, which are summed.</div>`;
+        displayFinalResults(y, false, 'y', 'n');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function calculateOverlapSave() {
+        const x = readRealSeq('x');
+        const h = readRealSeq('h');
+        const Nx = x.length, M = h.length;
+        let N = parseInt(document.getElementById('block-size').value) || Math.max(M, 4);
+        if (N < M) N = M;
+        const L = N - M + 1;
+        const numBlocks = Math.ceil((Nx + M - 1) / L);
+
+        let xExt = new Array(M - 1).fill(0).concat(x);
+        const totalNeeded = (M - 1) + (numBlocks - 1) * L + N;
+        while (xExt.length < totalNeeded) xExt.push(0);
+
+        const hPad = h.slice();
+        while (hPad.length < N) hPad.push(0);
+        const C = circulantMatrix(hPad, N);
+
+        let matrixHtml =
+            `<div class="matrix-eq">x[n] is prepended with M−1=${M - 1} zeros, then split into overlapping blocks of length N=${N} (each shifted by L=N−M+1=${L} samples from the previous). Every block is circularly convolved with h_p[n] (h zero-padded to N) via y_b = C · x_b using the same N × N circulant matrix C:</div>` +
+            renderMatrixTable(C, false, i => `n=${i}`, j => `m=${j}`, 'C (circulant)');
+
+        let stepsHtml = '';
+        let y = [];
+        for (let b = 0; b < numBlocks; b++) {
+            const blockX = xExt.slice(b * L, b * L + N);
+            let blockStepsHtml = `<div class="step-formula">Block ${b}: x_${b}[n] = [${blockX.map(formatNumber).join(', ')}]  (window of length N=${N} over the zero-prepended/extended sequence, starting at extended index ${b * L})</div>`;
+            const blockResult = [];
+            for (let i = 0; i < N; i++) {
+                const { html, value } = stepBlockReal(`y_${b}`, i, C[i], blockX);
+                blockStepsHtml += html;
+                blockResult.push(value);
+            }
+            const kept = blockResult.slice(M - 1);
+            blockStepsHtml += `<div class="step-result">Discard first M−1=${M - 1} samples (wrap-around distortion); keep y_${b}[${M - 1}..${N - 1}] = [${kept.map(formatNumber).join(', ')}]</div>`;
+            y = y.concat(kept);
+            stepsHtml += `<details class="step-group" open><summary>Block ${b} — ${N}-point circular convolution with h_p[n] (circulant matrix method)</summary>${blockStepsHtml}</details>`;
+        }
+        y = y.slice(0, Nx + M - 1);
+
+        document.getElementById('matrix-container').innerHTML = matrixHtml;
+        document.getElementById('steps-container').innerHTML = stepsHtml;
+        document.getElementById('note-container').innerHTML =
+            `<div class="note">Output length = Nx + M − 1 = ${Nx} + ${M} − 1 = ${Nx + M - 1}. Requires block size N ≥ M (using N=${N}); each block keeps L = N − M + 1 = ${L} valid samples after discarding the first M−1.</div>`;
+        displayFinalResults(y, false, 'y', 'n');
+        document.getElementById('result-title').innerText = modeMeta[currentMode].title;
+        document.getElementById('results-section').classList.add('active');
+        document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // ---------- Final results table ----------
+    function displayFinalResults(outputs, isComplex, prefix, idxSymbol) {
+        const tbody = document.getElementById('result-body');
+        tbody.innerHTML = '';
+        document.getElementById('th-index').innerText = idxSymbol;
+        document.getElementById('th-magphase').style.display = isComplex ? '' : 'none';
+
+        outputs.forEach((val, idx) => {
+            const tr = document.createElement('tr');
+            if (isComplex) {
+                const reStr = formatNumber(val.re);
+                const imStr = formatNumber(val.im);
+                const complexStr = imStr.startsWith('-') ? `${reStr} - ${imStr.substring(1)}j` : `${reStr} + ${imStr}j`;
+                const magStr = formatNumber(val.mag);
+                let phaseDeg = val.phase * (180 / Math.PI);
+                if (Math.abs(val.re) < 1e-10 && Math.abs(val.im) < 1e-10) phaseDeg = 0;
+                const phaseStr = formatNumber(phaseDeg);
+                tr.innerHTML = `
+                    <td><strong>${prefix}[${idx}]</strong></td>
+                    <td>${complexStr}</td>
+                    <td class="magnitude-phase">${magStr} ∠ ${phaseStr}°</td>
+                `;
+            } else {
+                tr.innerHTML = `
+                    <td><strong>${prefix}[${idx}]</strong></td>
+                    <td>${formatNumber(val)}</td>
+                    <td class="magnitude-phase"></td>
+                `;
+            }
+            tbody.appendChild(tr);
+        });
+    }
+
+    // Initialize on load
+    window.onload = function () {
+        switchMode('dft');
+    };
+</script>
+
+</body>
+</html>
