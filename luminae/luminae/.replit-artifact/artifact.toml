@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Luminae"
+description = "A playable turn-based grid survival prototype set on a flooded Earth, where players balance movement, territory claiming, resources, and escalating sea-creature waves while uncovering a story about healing the Mourner."
+version = "1.0.0"
+id = "artifacts/luminae"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 18882
+
+[services.development]
+run = "pnpm --filter @workspace/luminae run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/luminae", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/luminae/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18882"
+BASE_PATH = "/"
