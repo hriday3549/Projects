@@ -34,6 +34,13 @@ type Projectile = {
   progress: number;
   source: 'player' | 'turret';
 };
+type SupplyDrop = {
+  id: number;
+  x: number;
+  y: number;
+  resource: ResourceKey;
+  amount: number;
+};
 type Enemy = {
   id: number;
   x: number;
@@ -51,13 +58,24 @@ type Upgrades = {
   movement: number;
   claim: number;
   hull: number;
-  movementSpan: number;
   attackDamage: number;
   attackRange: number;
   attacks: number;
   luck: number;
   health: number;
 };
+
+type Stats = {
+  maxHp: number;
+  speed: number;
+  claimCapacity: number;
+  hullShielding: number;
+  attackDamage: number;
+  attackRange: number;
+  targetsPerVolley: number;
+  luck: number;
+};
+
 type Snapshot = {
   boardSize: number;
   player: [number, number];
@@ -67,13 +85,14 @@ type Snapshot = {
   enemies: Enemy[];
   blockHp: Record<string, number>;
   blockResources: Record<string, BlockResources>;
+  walls: Record<string, number>;
+  supplyDrops: SupplyDrop[];
   turrets: string[];
   turretStats: Record<string, TurretStats>;
   turretBlueprint: TurretStats;
   playerHp: number;
   movement: number;
   claimBudget: number;
-  attackBudget: number;
   xp: number;
   xpLevel: number;
   xpBank: number;
@@ -94,7 +113,6 @@ const initialUpgrades: Upgrades = {
   movement: 0,
   claim: 0,
   hull: 0,
-  movementSpan: 0,
   attackDamage: 0,
   attackRange: 0,
   attacks: 0,
@@ -120,6 +138,9 @@ const ENEMY_MOVE_SPEED = 3.7;
 const PLAYER_BASE_HP = 10;
 const RESOURCE_CLAIM_RADIUS = 0.48;
 const WEAPON_COOLDOWN_SECONDS = 0.55;
+const EXPAND_STEP = 1;
+const MAX_GRID_SIZE = 40;
+const MIN_TILE_SIZE = 18;
 const ENEMY_CONTACT_INTERVAL = 2;
 const ENEMY_ATTACK_RANGE = 2;
 const TURRET_ATTACK_RANGE = 6;
@@ -151,9 +172,54 @@ const resourceForTile: Partial<Record<TileType, ResourceKey>> = {
 };
 
 const keyFor = (x: number, y: number) => `${x}:${y}`;
-const xpThresholdFor = (level: number) => 10 * 2 ** Math.max(0, level - 1);
+const roundResourceValue = (value: number) => Math.round((value + Number.EPSILON) * 10) / 10;
+const xpThresholdFor = (level: number) => 2 ** Math.max(0, level - 1);
 const waveIntervalFor = (completedWave: number) =>
   completedWave < 2 ? 5 : completedWave < 4 ? 4 : 3;
+
+export const CONFIG = {
+  playerBaseHp: 10,
+  playerMoveSpeed: 2.8,
+  xpPerKill: 1,
+  xpThresholdBase: 2,
+  wallHp: 6,
+  wallBuildCostScavenged: 0.2,
+  turretRefundLuminae: 0.5,
+  turretBuildCostLuminae: 1,
+  turretRange: 6,
+  turretMinRange: 0,
+  wallTurretRangeBonus: 4,
+  wallTurretMinRange: 2,
+  turretRangeBuffer: 0.05,
+  weaponCooldownSeconds: 0.55,
+  maxGridSize: 40,
+  minTileSize: 18,
+  expandStep: 1,
+  claimRadius: 0.48,
+  levelCostFormula: (level: number) => level,
+} as const;
+
+export function getStats(state: Partial<Upgrades> = {}): Stats {
+  const movement = state.movement ?? 0;
+  const claim = state.claim ?? 0;
+  const hull = state.hull ?? 0;
+  const attackDamage = (state.attackDamage ?? 0) + 1;
+  const attackRange = (state.attackRange ?? 0) + 1;
+  const targetsPerVolley = 1 + (state.attacks ?? 0);
+  const luck = state.luck ?? 0;
+  const health = (state.health ?? 0) + 1;
+
+  return {
+    maxHp: CONFIG.playerBaseHp + health * 2,
+    speed: CONFIG.playerMoveSpeed + movement * 0.35,
+    claimCapacity: 2 + claim,
+    hullShielding: hull,
+    attackDamage,
+    attackRange,
+    targetsPerVolley,
+    luck,
+  };
+}
 
 function tileTypeAt(x: number, y: number, boardSize: number): TileType {
   const value = (x * 17 + y * 31 + boardSize * 13 + x * y * 7) % 19;
@@ -250,6 +316,11 @@ function edgeSpawnPositions(boardSize: number, count: number): Array<[number, nu
   return candidates.slice(0, count);
 }
 
+function clampPosition(value: number, boardSize: number) {
+  const margin = 0.35;
+  return Math.min(boardSize - margin, Math.max(margin, value));
+}
+
 function enemyStats(kind: EnemyKind, wave: number) {
   const waveUpgrade = Math.max(0, wave - 1);
   if (kind === 'razor') return { hp: 1 + waveUpgrade, damage: 2 + waveUpgrade, movement: 2 + waveUpgrade };
@@ -266,10 +337,12 @@ function App() {
   const [enemies, setEnemies] = useState<Enemy[]>([]);
   const [blockHp, setBlockHp] = useState<Record<string, number>>(initialBlockHp);
   const [blockResources, setBlockResources] = useState<Record<string, BlockResources>>(initialBlockResources);
+  const [walls, setWalls] = useState<Record<string, number>>({});
   const [turrets, setTurrets] = useState<string[]>([]);
   const [turretStats, setTurretStats] = useState<Record<string, TurretStats>>({});
   const [turretBlueprint, setTurretBlueprint] = useState<TurretStats>({ damage: 2, interval: TURRET_FIRE_INTERVAL });
   const [selectedTurretKey, setSelectedTurretKey] = useState<string | null>(null);
+  const [supplyDrops, setSupplyDrops] = useState<SupplyDrop[]>([]);
   const [playerHp, setPlayerHp] = useState(PLAYER_BASE_HP);
   const [turn, setTurn] = useState(1);
   const [wave, setWave] = useState(0);
@@ -277,7 +350,6 @@ function App() {
   const [turnsSinceWave, setTurnsSinceWave] = useState(0);
   const [movement, setMovement] = useState(3);
   const [claimBudget, setClaimBudget] = useState(2);
-  const [attackBudget, setAttackBudget] = useState(1);
   const [xp, setXp] = useState(0);
   const [xpLevel, setXpLevel] = useState(1);
   const [xpBank, setXpBank] = useState(0);
@@ -322,15 +394,15 @@ function App() {
   );
 
   const boardIsExpanded = boardSize > 8;
+  const stats = useMemo(() => getStats(upgrades), [upgrades]);
   const movementMax = 3 + upgrades.movement;
-  const movementSpeed = PLAYER_MOVE_SPEED + upgrades.movement * 0.35;
-  const movementSpan = 1 + upgrades.movementSpan;
-  const claimMax = 2 + upgrades.claim;
-  const attackDamage = 1 + upgrades.attackDamage;
-  const attackRange = 1 + upgrades.attackRange;
-  const attacksPerTurn = 1 + upgrades.attacks;
-  const luckDropBonus = upgrades.luck;
-  const playerMaxHp = PLAYER_BASE_HP + upgrades.health * 2;
+  const movementSpeed = stats.speed;
+  const claimMax = stats.claimCapacity;
+  const attackDamage = stats.attackDamage;
+  const attackRange = stats.attackRange;
+  const attacksPerTurn = stats.targetsPerVolley;
+  const luckDropBonus = stats.luck;
+  const playerMaxHp = stats.maxHp;
   const xpToNext = xpThresholdFor(xpLevel);
   const waveInterval = waveIntervalFor(wave);
   const nextWaveIn = Math.max(1, waveInterval - turnsSinceWave);
@@ -355,6 +427,20 @@ function App() {
         Math.hypot(player[0] - a.x, player[1] - a.y) -
         Math.hypot(player[0] - b.x, player[1] - b.y),
     )[0] ?? null;
+  const routePreview = useMemo(() => {
+    if (!claimTarget) return [] as Array<[number, number]>;
+    const path = findPathToTerritory([Math.round(player[0]), Math.round(player[1])], claimed, boardSize);
+    const fallback = path.length ? path.slice(0, 6) : [[Math.round(claimTarget.x), Math.round(claimTarget.y)]];
+    return fallback.map(([x, y]) => [x, y] as [number, number]);
+  }, [boardSize, claimTarget, claimed, player]);
+  const routePreviewSet = useMemo(() => new Set(routePreview.map(([x, y]) => keyFor(x, y))), [routePreview]);
+  const nextWavePlan = useMemo(() => {
+    const lead = Math.min(4, Math.max(1, Math.ceil(wave / 2) + 1));
+    const drifters = Math.max(1, lead);
+    const razor = wave >= 2 ? 1 : 0;
+    const siege = wave >= 3 ? 1 : 0;
+    return { drifters, razor, siege, total: drifters + razor + siege };
+  }, [wave]);
   const claimTargetDistance = claimTarget
     ? Math.hypot(player[0] - claimTarget.x, player[1] - claimTarget.y)
     : Number.POSITIVE_INFINITY;
@@ -372,13 +458,14 @@ function App() {
     blockResources: Object.fromEntries(
       Object.entries(blockResources).map(([tileKey, resourceMap]) => [tileKey, { ...resourceMap }]),
     ),
+    walls: { ...walls },
+    supplyDrops: supplyDrops.map((drop) => ({ ...drop })),
     turrets: [...turrets],
     turretStats: Object.fromEntries(Object.entries(turretStats).map(([key, stats]) => [key, { ...stats }])),
     turretBlueprint: { ...turretBlueprint },
     playerHp,
     movement,
     claimBudget,
-    attackBudget,
     xp,
     xpLevel,
     xpBank,
@@ -396,6 +483,33 @@ function App() {
     ].slice(0, 8));
   };
 
+  const expandBoard = () => {
+    const nextBoardSize = Math.min(MAX_GRID_SIZE, boardSize + EXPAND_STEP);
+    if (nextBoardSize === boardSize) {
+      addFeed('Territory expansion is capped at the current limit.', 'MAP');
+      return;
+    }
+    setBoardSize(nextBoardSize);
+    setPlayer((current) => [Math.min(current[0], nextBoardSize - 0.35), Math.min(current[1], nextBoardSize - 0.35)]);
+    setEdgeWarning(false);
+    addFeed('Territory expanded', 'MAP');
+  };
+
+  const debugClaimAllTiles = () => {
+    if (typeof window === 'undefined' || !window.location.search.includes('debug=1')) {
+      return;
+    }
+    setClaimed((current) => {
+      const allTiles = Array.from({ length: boardSize * boardSize }, (_, index) => {
+        const x = index % boardSize;
+        const y = Math.floor(index / boardSize);
+        return keyFor(x, y);
+      });
+      return Array.from(new Set([...current, ...allTiles]));
+    });
+    addFeed('Debug claim-all applied for expansion testing.', 'DEBUG');
+  };
+
   const captureAction = () => {
     if (gameState === 'playing' && phase === 'play' && stateRef.current) {
       historyRef.current.push(stateRef.current);
@@ -411,6 +525,8 @@ function App() {
     setEnemies(saved.enemies);
     setBlockHp(saved.blockHp);
     setBlockResources(saved.blockResources);
+    setWalls(saved.walls);
+    setSupplyDrops(saved.supplyDrops ?? []);
     setTurrets(saved.turrets);
     setTurretStats(saved.turretStats);
     setTurretBlueprint(saved.turretBlueprint);
@@ -418,7 +534,6 @@ function App() {
     setPlayerHp(saved.playerHp);
     setMovement(saved.movement);
     setClaimBudget(saved.claimBudget);
-    setAttackBudget(saved.attackBudget);
     setXp(saved.xp);
     setXpLevel(saved.xpLevel);
     setXpBank(saved.xpBank);
@@ -446,6 +561,8 @@ function App() {
     setEnemies([]);
     setBlockHp(initialBlockHp);
     setBlockResources(initialBlockResources);
+    setWalls({});
+    setSupplyDrops([]);
     setTurrets([]);
     setTurretStats({});
     setTurretBlueprint({ damage: 2, interval: TURRET_FIRE_INTERVAL });
@@ -457,7 +574,6 @@ function App() {
     setTurnsSinceWave(0);
     setMovement(3);
     setClaimBudget(2);
-    setAttackBudget(1);
     setXp(0);
     setXpLevel(1);
     setXpBank(0);
@@ -481,23 +597,6 @@ function App() {
       { id: Date.now(), label: 'T+00', text: 'Campaign restarted. Core territory is holding.' },
       { id: Date.now() + 1, label: 'LOG', text: 'Two claim actions reach Kael’s 3 × 3 zone. Every block must stay connected to the core; Luck improves capture drops.' },
     ]);
-  };
-
-  const expandBoard = (x: number, y: number) => {
-    const offset = 2;
-    setBoardSize((current) => current + 4);
-    setPlayer([x + offset, y + offset]);
-    setClaimed((current) => current.map((tileKey) => addOffsetToKey(tileKey, offset)));
-    setTurrets((current) => current.map((tileKey) => addOffsetToKey(tileKey, offset)));
-    setTurretStats((current) => Object.fromEntries(Object.entries(current).map(([tileKey, stats]) => [addOffsetToKey(tileKey, offset), stats])));
-    setBlockHp((current) =>
-      Object.fromEntries(Object.entries(current).map(([tileKey, hp]) => [addOffsetToKey(tileKey, offset), hp])),
-    );
-    setBlockResources((current) =>
-      Object.fromEntries(Object.entries(current).map(([tileKey, stored]) => [addOffsetToKey(tileKey, offset), stored])),
-    );
-    setEdgeWarning(false);
-    addFeed('Chart boundary breached. New water is being rendered around the settlement.', 'AUTO');
   };
 
   const handleMove = (x: number, y: number) => {
@@ -545,7 +644,8 @@ function App() {
     const stored = Object.fromEntries(
       Object.entries(baseStored).map(([resourceKey, amount]) => [resourceKey, (amount ?? 0) + luckDropBonus]),
     ) as BlockResources;
-    setClaimed((current) => [...current, tileKey]);
+    const nextClaimed = [...claimed, tileKey];
+    setClaimed(nextClaimed);
     setBlockHp((current) => ({ ...current, [tileKey]: 5 }));
     setBlockResources((current) => ({ ...current, [tileKey]: stored }));
     setClaimBudget((current) => current - 1);
@@ -553,12 +653,36 @@ function App() {
       const yieldAmount = stored[resource] ?? 0;
       setResources((current) => ({ ...current, [resource]: current[resource] + yieldAmount }));
       addFeed(`${tileNames[type]} secured. ${tileNames[type]} drop +${yieldAmount}${luckDropBonus ? ` · Luck +${luckDropBonus}` : ''}.`);
-      if (unclaimedResourceTiles.length === 1) {
-        addFeed('All resources in this chart are claimed. The outer ring is now unlocked.', 'MAP');
+      if (nextClaimed.length >= boardSize * boardSize) {
+        expandBoard();
       }
       return;
     }
+    if (nextClaimed.length >= boardSize * boardSize) {
+      expandBoard();
+    }
     addFeed('Empty ground secured. This block is now eligible for turret construction.', 'BUILD');
+  };
+
+  const registerKill = (enemy: Enemy, source: 'kael' | 'turret') => {
+    const amount = CONFIG.xpPerKill;
+    let nextXp = xp + amount;
+    let nextLevel = xpLevel;
+    let levelsGained = 0;
+    while (nextXp >= xpThresholdFor(nextLevel)) {
+      nextXp -= xpThresholdFor(nextLevel);
+      nextLevel += 1;
+      levelsGained += nextLevel;
+    }
+    setXp(nextXp);
+    setXpLevel(nextLevel);
+    if (levelsGained > 0) {
+      setXpBank((current) => current + levelsGained);
+    }
+    addFeed(
+      `${source === 'kael' ? 'Kael' : 'Turret'} confirmed target ${enemy.kind}. +${amount} progress${levelsGained > 0 ? ` · level ${nextLevel} reached · +${levelsGained} XP` : ''}.`,
+      'XP',
+    );
   };
 
   const grantExperience = (amount: number) => {
@@ -568,62 +692,113 @@ function App() {
     while (nextXp >= xpThresholdFor(nextLevel)) {
       nextXp -= xpThresholdFor(nextLevel);
       nextLevel += 1;
-      levelsGained += 1;
+      levelsGained += nextLevel;
     }
     setXp(nextXp);
     setXpLevel(nextLevel);
     if (levelsGained) setXpBank((current) => current + levelsGained);
     addFeed(
-      `Combat salvage +${amount} progress${levelsGained ? ` · ${levelsGained} XP reward${levelsGained === 1 ? '' : 's'} earned · level ${nextLevel} reached` : ''}.`,
+      `Combat salvage +${amount} progress${levelsGained ? ` · +${levelsGained} XP earned · level ${nextLevel} reached` : ''}.`,
       'XP',
     );
   };
 
-  const handleAttack = (enemyId: number) => {
+  const handleAttack = (enemyId?: number) => {
     if (gameState !== 'playing' || phase !== 'play') return;
-    const enemy = enemies.find((candidate) => candidate.id === enemyId);
-    if (!enemy) {
-      return;
-    }
-    if (selectedEnemyId !== null && selectedEnemyId !== enemyId) {
-      addFeed('Kael is already locked onto one hostile. Finish that target before switching.', 'COMBAT');
-      return;
-    }
-    setSelectedEnemyId(enemyId);
-    const distance = Math.hypot(player[0] - enemy.x, player[1] - enemy.y);
-    if (distance > attackRange + WEAPON_RANGE_BUFFER) {
-      addFeed(`Hostile is outside Kael’s attack range of ${attackRange} tiles.`, 'COMBAT');
+    const liveEnemies = enemiesRef.current;
+    const candidateTarget = typeof enemyId === 'number'
+      ? liveEnemies.find((candidate) => candidate.id === enemyId)
+      : liveEnemies
+          .map((enemy) => ({ enemy, distance: Math.hypot(playerRef.current[0] - enemy.x, playerRef.current[1] - enemy.y) }))
+          .filter(({ distance }) => distance <= attackRange + WEAPON_RANGE_BUFFER)
+          .sort((a, b) => a.distance - b.distance)[0]?.enemy;
+
+    if (!candidateTarget) {
+      addFeed('No hostile is within Kael’s current weapon range.', 'COMBAT');
       return;
     }
     if (attackCooldownRef.current > 0) {
       addFeed(`Weapon cycling. Ready in ${attackCooldownRef.current.toFixed(1)}s.`, 'COMBAT');
       return;
     }
+
+    const targets = liveEnemies
+      .map((enemy) => ({ enemy, distance: Math.hypot(playerRef.current[0] - enemy.x, playerRef.current[1] - enemy.y) }))
+      .filter(({ distance }) => distance <= attackRange + WEAPON_RANGE_BUFFER)
+      .sort((a, b) => a.distance - b.distance)
+      .map(({ enemy }) => enemy)
+      .slice(0, Math.max(1, stats.targetsPerVolley));
+
+    if (!targets.length) {
+      addFeed('No hostile is within Kael’s current weapon range.', 'COMBAT');
+      return;
+    }
+
     captureAction();
-    const remainingHp = enemy.hp - attackDamage;
     attackCooldownRef.current = WEAPON_COOLDOWN_SECONDS;
     setAttackCooldown(WEAPON_COOLDOWN_SECONDS);
-    setWeaponFlash({
-      from: [...player] as [number, number],
-      to: [enemy.x, enemy.y],
+    const updatedEnemies = liveEnemies.map((enemy) => ({ ...enemy }));
+    const kills: Enemy[] = [];
+
+    targets.forEach((target) => {
+      const index = updatedEnemies.findIndex((enemy) => enemy.id === target.id);
+      if (index === -1) return;
+      const afterHit = updatedEnemies[index].hp - attackDamage;
+      setWeaponFlash({
+        from: [...playerRef.current] as [number, number],
+        to: [target.x, target.y],
+      });
+      setProjectiles((current) => [...current, {
+        id: projectileIdRef.current++,
+        from: [...playerRef.current] as [number, number],
+        to: [target.x, target.y],
+        progress: 0,
+        source: 'player',
+      }]);
+      if (afterHit <= 0) {
+        kills.push(updatedEnemies[index]);
+        updatedEnemies.splice(index, 1);
+      } else {
+        updatedEnemies[index] = { ...updatedEnemies[index], hp: afterHit };
+      }
     });
-    setProjectiles((current) => [...current, {
-      id: projectileIdRef.current++,
-      from: [...player] as [number, number],
-      to: [enemy.x, enemy.y],
-      progress: 0,
-      source: 'player',
-    }]);
-    window.setTimeout(() => setWeaponFlash(null), 160);
-    if (remainingHp <= 0) {
-      setEnemies((current) => current.filter((candidate) => candidate.id !== enemy.id));
-      setSelectedEnemyId(null);
-      addFeed(`Kael dealt ${attackDamage} damage to ${enemy.kind}; target neutralized.`, 'COMBAT');
-      grantExperience(enemy.kind === 'razor' ? 4 : enemy.kind === 'siege' ? 10 : 6);
+
+    if (kills.length) {
+      kills.forEach((enemy) => registerKill(enemy, 'kael'));
+      addFeed(`Kael eliminated ${kills.length} hostile${kills.length === 1 ? '' : 's'} with a volley.`, 'COMBAT');
     } else {
-      setEnemies((current) => current.map((candidate) => candidate.id === enemy.id ? { ...candidate, hp: remainingHp } : candidate));
-      addFeed(`Kael damaged ${enemy.kind} for ${attackDamage}. ${remainingHp} HP remains.`, 'COMBAT');
+      addFeed(`Kael fired a ${targets.length}-target volley for ${attackDamage} damage each.`, 'COMBAT');
     }
+    setSelectedEnemyId(updatedEnemies[0]?.id ?? null);
+    setEnemies(updatedEnemies);
+    enemiesRef.current = updatedEnemies;
+    window.setTimeout(() => setWeaponFlash(null), 160);
+  };
+
+  const handleBuildWall = (x: number, y: number) => {
+    if (gameState !== 'playing' || phase !== 'play') return;
+    const tileKey = keyFor(x, y);
+    const distance = Math.abs(player[0] - x) + Math.abs(player[1] - y);
+    if (distance > 1) {
+      addFeed('Walls must be built on adjacent claimed ground.', 'BUILD');
+      return;
+    }
+    if (!claimed.includes(tileKey) || turrets.includes(tileKey) || (walls[tileKey] ?? 0) > 0) {
+      addFeed('A wall can only be placed on adjacent claimed space that is not already occupied.', 'BUILD');
+      return;
+    }
+    if (resources.scavenge < CONFIG.wallBuildCostScavenged) {
+      addFeed(`Wall construction costs ${CONFIG.wallBuildCostScavenged} scavenged material.`, 'BUILD');
+      return;
+    }
+    captureAction();
+    setResources((current) => ({
+      ...current,
+      scavenge: roundResourceValue(current.scavenge - CONFIG.wallBuildCostScavenged),
+    }));
+    setWalls((current) => ({ ...current, [tileKey]: CONFIG.wallHp }));
+    setBlockHp((current) => ({ ...current, [tileKey]: (current[tileKey] ?? 5) + CONFIG.wallHp }));
+    addFeed(`Wall erected at ${tileKey}. Structural integrity ${CONFIG.wallHp} HP.`, 'BUILD');
   };
 
   const handleBuildTurret = (x: number, y: number) => {
@@ -631,11 +806,12 @@ function App() {
     const tileKey = keyFor(x, y);
     const distance = Math.abs(player[0] - x) + Math.abs(player[1] - y);
     if (distance > 1) {
-      addFeed('Turrets must be built on adjacent neutral water.');
+      addFeed('Turrets must be built on adjacent claimed ground or a wall tile.', 'BUILD');
       return;
     }
-    if (tileTypeAt(x, y, boardSize) !== 'blank' || !claimed.includes(tileKey) || turrets.includes(tileKey)) {
-      addFeed('Turrets require an empty block that is already claimed.');
+    const wallHealth = walls[tileKey] ?? 0;
+    if ((!claimed.includes(tileKey) || turrets.includes(tileKey)) && wallHealth === 0) {
+      addFeed('Turrets require claimed ground or a wall tile that is not already occupied.', 'BUILD');
       return;
     }
     if (resources.luminae < 1) {
@@ -647,7 +823,8 @@ function App() {
     setTurrets((current) => [...current, tileKey]);
     setTurretStats((current) => ({ ...current, [tileKey]: { ...turretBlueprint } }));
     turretTimersRef.current[tileKey] = 0;
-    addFeed(`Luminae turret built. It deals ${turretBlueprint.damage} damage every ${turretBlueprint.interval}s within 6 tiles.`, 'BUILD');
+    const wallBonusText = wallHealth > 0 ? ` Wall mount adds ${CONFIG.wallTurretRangeBonus} extra range and a ${CONFIG.wallTurretMinRange}-tile minimum engagement window.` : '';
+    addFeed(`Luminae turret built. It deals ${turretBlueprint.damage} damage every ${turretBlueprint.interval}s within ${CONFIG.turretRange}${wallBonusText ? ` (+${CONFIG.wallTurretRangeBonus})` : ''} tiles.`, 'BUILD');
   };
 
   const fireTurrets = (enemyPool: Enemy[], firingTurretKeys = turrets) => {
@@ -655,12 +832,19 @@ function App() {
     const hitIds = new Set<number>();
     let nextEnemies = enemyPool.map((enemy) => ({ ...enemy }));
     firingTurretKeys.forEach((turretKey) => {
+      const [turretX, turretY] = turretKey.split(':').map(Number);
+      const wallBonus = (walls[turretKey] ?? 0) > 0 ? CONFIG.wallTurretRangeBonus : 0;
+      const minRange = (walls[turretKey] ?? 0) > 0 ? CONFIG.wallTurretMinRange : CONFIG.turretMinRange;
       const nearestEnemy = nextEnemies
         .filter((enemy) => !hitIds.has(enemy.id))
-        .map((enemy) => ({ enemy, distance: Math.abs(Number(turretKey.split(':')[0]) - enemy.x) + Math.abs(Number(turretKey.split(':')[1]) - enemy.y) }))
+        .map((enemy) => ({
+          enemy,
+          distance: Math.abs(turretX - enemy.x) + Math.abs(turretY - enemy.y),
+        }))
+        .filter(({ distance }) => distance >= minRange && distance <= TURRET_ATTACK_RANGE + wallBonus)
         .sort((a, b) => a.distance - b.distance)[0];
-      if (!nearestEnemy || nearestEnemy.distance > TURRET_ATTACK_RANGE) return;
-      const nearestTurret = turretKey.split(':').map(Number) as [number, number];
+      if (!nearestEnemy) return;
+      const nearestTurret = [turretX, turretY] as [number, number];
       setProjectiles((current) => [...current, {
         id: projectileIdRef.current++,
         from: nearestTurret,
@@ -676,11 +860,14 @@ function App() {
       }
       nextEnemies = nextEnemies.map((enemy) => enemy.id === nearestEnemy.enemy.id ? { ...enemy, hp: nextHp } : enemy);
     });
+    const defeatedEnemies = nextEnemies.filter((enemy) => hitIds.has(enemy.id));
     nextEnemies = nextEnemies.filter((enemy) => !hitIds.has(enemy.id));
     if (hitIds.size) {
+      defeatedEnemies.forEach((enemy) => registerKill(enemy, 'turret'));
       addFeed(`${hitIds.size} hostile${hitIds.size === 1 ? '' : 's'} took turret damage and were destroyed.`, 'TURRET');
-      grantExperience(hitIds.size * 5);
-    } else addFeed('Turret shot registered within the 6-tile perimeter.', 'TURRET');
+    } else if (firingTurretKeys.some((turretKey) => (walls[turretKey] ?? 0) > 0 || (turretStats[turretKey] ?? turretBlueprint).damage > 0)) {
+      addFeed('Turret shot registered within the defensive perimeter.', 'TURRET');
+    }
     return { enemies: nextEnemies, kills: hitIds.size };
   };
 
@@ -701,6 +888,7 @@ function App() {
     const movedEnemies = activeEnemies;
 
     const nextBlockHp = { ...blockHp };
+    const nextWallHp = { ...walls };
     const damageByTile: Record<string, number> = {};
     movedEnemies
       .map((enemy) => ({
@@ -714,9 +902,22 @@ function App() {
       .forEach((enemy) => {
         const tileKey = enemy.tileKey!;
         const effectiveDamage = Math.max(1, enemy.enemy.damage - upgrades.hull);
+        const wallHp = nextWallHp[tileKey] ?? 0;
+        let remainingDamage = effectiveDamage;
+        if (wallHp > 0) {
+          const wallDamage = Math.min(wallHp, remainingDamage);
+          remainingDamage -= wallDamage;
+          nextWallHp[tileKey] = Math.max(0, wallHp - wallDamage);
+          addFeed(`Enemy struck the wall at ${tileKey} for ${wallDamage}. ${Math.max(0, nextWallHp[tileKey])} HP remains.`, 'GRID');
+          if (nextWallHp[tileKey] <= 0) {
+            delete nextWallHp[tileKey];
+          }
+        }
         damageByTile[tileKey] = (damageByTile[tileKey] ?? 0) + effectiveDamage;
-        nextBlockHp[tileKey] = (nextBlockHp[tileKey] ?? 5) - effectiveDamage;
-        addFeed(`Enemy damaged claimed block ${tileKey} for ${effectiveDamage}. ${Math.max(0, nextBlockHp[tileKey])} HP remains.`, 'GRID');
+        nextBlockHp[tileKey] = Math.max(0, (nextBlockHp[tileKey] ?? 5) - remainingDamage);
+        if (remainingDamage > 0) {
+          addFeed(`Enemy damaged claimed block ${tileKey} for ${remainingDamage}. ${Math.max(0, nextBlockHp[tileKey])} HP remains.`, 'GRID');
+        }
       });
 
     const destroyedTiles = Object.keys(damageByTile).filter((tileKey) => nextBlockHp[tileKey] <= 0);
@@ -743,6 +944,7 @@ function App() {
 
     setEnemies(movedEnemies);
     setBlockHp(Object.fromEntries(Object.entries(nextBlockHp).filter(([tileKey]) => connectedAfterDamage.has(tileKey))));
+    setWalls(Object.fromEntries(Object.entries(nextWallHp).filter(([tileKey]) => connectedAfterDamage.has(tileKey))));
     setClaimed(remainingTerritory);
     setBlockResources((current) => {
       const next = { ...current };
@@ -789,6 +991,20 @@ function App() {
     window.setTimeout(() => setPhase('play'), 900);
   };
 
+  const spawnSupplyDrop = () => {
+    const availableTiles = Array.from({ length: boardSize * boardSize }, (_, index) => {
+      const x = index % boardSize;
+      const y = Math.floor(index / boardSize);
+      return { x, y, key: keyFor(x, y) };
+    }).filter(({ key }) => !claimed.includes(key) && !turrets.includes(key) && !(walls[key] ?? 0));
+    if (!availableTiles.length) return;
+    const candidate = availableTiles[Math.floor(Math.random() * availableTiles.length)];
+    const resourcePool: ResourceKey[] = ['oxygen', 'scavenge', 'luminae', 'signal'];
+    const resource = resourcePool[Math.floor(Math.random() * resourcePool.length)];
+    const amount = resource === 'oxygen' ? 6 : resource === 'scavenge' ? 4 : resource === 'luminae' ? 1 : 2;
+    setSupplyDrops((current) => [...current, { id: Date.now() + Math.random(), x: candidate.x, y: candidate.y, resource, amount }]);
+  };
+
   const endTurn = () => {
     if (gameState !== 'playing' || phase !== 'play') return;
     historyRef.current = [];
@@ -797,7 +1013,6 @@ function App() {
     setTurn(nextTurn);
     setMovement(movementMax);
     setClaimBudget(claimMax);
-    setAttackBudget(attacksPerTurn);
     setEdgeWarning(false);
     addFeed(`Turn ${String(nextTurn).padStart(2, '0')} ready. Movement, claims, and attacks restored.`);
     if (nextTurnsSinceWave >= waveInterval) {
@@ -805,6 +1020,9 @@ function App() {
       resolveWave(enemies);
     } else {
       setTurnsSinceWave(nextTurnsSinceWave);
+    }
+    if (nextTurn % 3 === 0 && supplyDrops.length < 2) {
+      spawnSupplyDrop();
     }
   };
 
@@ -890,9 +1108,6 @@ function App() {
   const applyHullUpgrade = () => {
     setUpgrades((current) => ({ ...current, hull: current.hull + 1 }));
   };
-  const applyMovementSpanUpgrade = () => {
-    setUpgrades((current) => ({ ...current, movementSpan: current.movementSpan + 1 }));
-  };
   const applyDamageUpgrade = () => {
     setUpgrades((current) => ({ ...current, attackDamage: current.attackDamage + 1 }));
   };
@@ -945,10 +1160,28 @@ function App() {
     addFeed(`Future turret ${kind} upgraded.`, 'TURRET');
   };
 
+  const removeSelectedTurret = () => {
+    if (gameState !== 'playing' || phase !== 'play') return;
+    if (!selectedTurretKey || !turrets.includes(selectedTurretKey)) {
+      addFeed('Select a built turret to remove it.', 'TURRET');
+      return;
+    }
+    captureAction();
+    const refund = roundResourceValue(CONFIG.turretBuildCostLuminae * CONFIG.turretRefundLuminae);
+    setTurrets((current) => current.filter((key) => key !== selectedTurretKey));
+    setTurretStats((current) => {
+      const next = { ...current };
+      delete next[selectedTurretKey];
+      return next;
+    });
+    setSelectedTurretKey(null);
+    setResources((current) => ({ ...current, luminae: roundResourceValue(current.luminae + refund) }));
+    addFeed(`Turret removed. +${refund.toFixed(1)} Luminae refunded.`, 'TURRET');
+  };
+
   const upgradeMovementResource = () => spendResources(`Movement speed // ${movementSpeed + 0.35}`, movementResourceCost, applyMovementRangeUpgrade);
   const upgradeClaimResource = () => spendResources(`Claim capacity // ${claimMax + 1}`, claimResourceCost, applyClaimUpgrade);
   const upgradeHullResource = () => spendResources(`Hull shielding // ${upgrades.hull + 1}`, hullResourceCost, applyHullUpgrade);
-  const upgradeMovementXp = () => spendExperience(`Movement span // ${movementSpan + 1}`, 1, applyMovementSpanUpgrade);
   const upgradeDamageXp = () => spendExperience(`Attack damage // ${attackDamage + 1}`, 1, applyDamageUpgrade);
   const upgradeRangeXp = () => spendExperience(`Attack range // ${attackRange + 1}`, 1, applyRangeUpgrade);
   const upgradeAttacksXp = () => spendExperience(`Attacks per turn // ${attacksPerTurn + 1}`, 1, applyAttacksUpgrade);
@@ -982,13 +1215,25 @@ function App() {
     const onKeyUp = (event: KeyboardEvent) => {
       keysRef.current.delete(event.key.toLowerCase());
     };
+    const onBlur = () => keysRef.current.clear();
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
   });
+
+  useEffect(() => {
+    const debugAll = () => {
+      if (window.location.search.includes('debug=1')) {
+        debugClaimAllTiles();
+      }
+    };
+    debugAll();
+  }, [boardSize, claimed.length, gameState, phase]);
 
   useEffect(() => {
     if (gameState !== 'playing' || phase !== 'play') return;
@@ -1020,14 +1265,25 @@ function App() {
       const directionLength = Math.hypot(horizontal, vertical);
 
       if (directionLength > 0) {
-        const nextX = Math.max(0.35, Math.min(boardSize - 0.35, currentX + (horizontal / directionLength) * movementSpeed * delta));
-        const nextY = Math.max(0.35, Math.min(boardSize - 0.35, currentY + (vertical / directionLength) * movementSpeed * delta));
+        const moveX = horizontal / directionLength;
+        const moveY = vertical / directionLength;
+        const travelDistance = movementSpeed * delta;
+        const steps = Math.max(1, Math.ceil(travelDistance / 0.15));
+        let nextX = currentX;
+        let nextY = currentY;
+
+        for (let step = 0; step < steps; step += 1) {
+          const stepDistance = travelDistance / steps;
+          nextX = clampPosition(nextX + moveX * stepDistance, boardSize);
+          nextY = clampPosition(nextY + moveY * stepDistance, boardSize);
+        }
+
         const touchingEdge = nextX <= 0.36 || nextY <= 0.36 || nextX >= boardSize - 0.36 || nextY >= boardSize - 0.36;
 
         if (touchingEdge && boardSize < 16) {
           if (allResourcesClaimed && !expansionLockRef.current) {
             expansionLockRef.current = true;
-            expandBoard(Math.round(nextX), Math.round(nextY));
+            expandBoard();
             window.setTimeout(() => {
               expansionLockRef.current = false;
             }, 450);
@@ -1037,7 +1293,7 @@ function App() {
         } else {
           playerRef.current = [nextX, nextY];
           setPlayer([nextX, nextY]);
-          if (!touchingEdge) setEdgeWarning(false);
+          setEdgeWarning(false);
         }
       }
 
@@ -1102,6 +1358,19 @@ function App() {
         }
       }
 
+      setSupplyDrops((current) => current.filter((drop) => {
+        const distance = Math.hypot(drop.x - playerRef.current[0], drop.y - playerRef.current[1]);
+        if (distance <= 0.7) {
+          setResources((resourceState) => ({
+            ...resourceState,
+            [drop.resource]: resourceState[drop.resource] + drop.amount,
+          }));
+          addFeed(`Supply drop recovered at ${drop.x}, ${drop.y}. +${drop.amount} ${drop.resource}.`, 'SUPPLY');
+          return false;
+        }
+        return true;
+      }));
+
       if (renderAccumulatorRef.current >= SIMULATION_RENDER_INTERVAL) renderAccumulatorRef.current = 0;
 
       animationFrame = window.requestAnimationFrame(tick);
@@ -1132,7 +1401,21 @@ function App() {
       if (enemy) handleAttack(enemy.id);
       else addFeed('No hostile contact at that coordinate.', 'COMBAT');
     }
-    if (mode === 'build') handleBuildTurret(x, y);
+    if (mode === 'build') {
+      if ((walls[clickedKey] ?? 0) > 0) {
+        handleBuildTurret(x, y);
+        return;
+      }
+      if (claimed.includes(clickedKey) && Math.abs(player[0] - x) + Math.abs(player[1] - y) <= 1) {
+        if (tileTypeAt(x, y, boardSize) === 'blank') {
+          handleBuildWall(x, y);
+        } else {
+          handleBuildTurret(x, y);
+        }
+        return;
+      }
+      handleBuildTurret(x, y);
+    }
   };
 
   const resourceShortNames: Record<ResourceKey, string> = {
@@ -1152,7 +1435,6 @@ function App() {
     { label: 'Hull shielding', level: upgrades.hull, value: `HUL ${upgrades.hull}`, cost: hullResourceCost, action: upgradeHullResource },
   ];
   const xpUpgradeRows = [
-    { label: 'Movement span', level: upgrades.movementSpan, value: `SPAN ${movementSpan}`, action: upgradeMovementXp },
     { label: 'Attack damage', level: upgrades.attackDamage, value: `DMG ${attackDamage}`, action: upgradeDamageXp },
     { label: 'Attack range', level: upgrades.attackRange, value: `RNG ${attackRange}`, action: upgradeRangeXp },
     { label: 'Attacks per turn', level: upgrades.attacks, value: `ATK ${attacksPerTurn}`, action: upgradeAttacksXp },
@@ -1209,18 +1491,23 @@ function App() {
                     const isClaimTarget = claimTarget?.x === tile.x && claimTarget?.y === tile.y;
                     const isCore = tileKey === coreKey;
                     const isWarning = boardSize < 16 && outerBuffer(tile.x, tile.y);
+                    const wallHealth = walls[tileKey] ?? 0;
                     const isTurret = turrets.includes(tileKey);
                     const resource = resourceForTile[tile.type];
+                    const supplyDrop = supplyDrops.find((drop) => drop.x === tile.x && drop.y === tile.y);
+                    const isRoutePreview = routePreviewSet.has(tileKey);
                     return (
                       <button
                         key={tileKey}
-                        className={`tile tile-type-${tile.type} ${isClaimed ? 'claimed' : 'neutral-tile'} ${isCore ? 'core' : ''} ${isClaimTarget ? 'claimable' : ''} ${isClaimTarget && canClaimTarget ? 'claim-ready' : ''} ${isWarning && edgeWarning ? 'edge-warning' : ''} ${isTurret ? 'turret-tile' : ''}`}
+                        className={`tile tile-type-${tile.type} ${isClaimed ? 'claimed' : 'neutral-tile'} ${isCore ? 'core' : ''} ${isClaimTarget ? 'claimable' : ''} ${isClaimTarget && canClaimTarget ? 'claim-ready' : ''} ${isWarning && edgeWarning ? 'edge-warning' : ''} ${isTurret ? 'turret-tile' : ''} ${wallHealth > 0 ? 'wall-tile' : ''} ${isRoutePreview ? 'claim-ready' : ''}`}
                         onClick={() => handleTileClick(tile.x, tile.y)}
                         data-testid={`tile-${tile.x}-${tile.y}`}
-                        aria-label={`${tileNames[tile.type]} at ${tile.x}, ${tile.y}${resource ? ', resource node' : ''}${isClaimed ? `, claimed, ${blockHp[tileKey] ?? 5} HP` : ''}${isTurret ? ', turret' : ''}`}
+                        aria-label={`${tileNames[tile.type]} at ${tile.x}, ${tile.y}${resource ? ', resource node' : ''}${isClaimed ? `, claimed, ${blockHp[tileKey] ?? 5} HP` : ''}${wallHealth > 0 ? `, wall, ${wallHealth} HP` : ''}${isTurret ? ', turret' : ''}${supplyDrop ? `, supply drop ${supplyDrop.resource}` : ''}`}
+                        style={isRoutePreview ? { boxShadow: 'inset 0 0 0 2px rgba(110, 231, 183, 0.9)' } : undefined}
                       >
-                        <span className="tile-glyph">{isTurret ? 'T' : tileGlyphs[tile.type]}</span>
-                        {isClaimed && <span className="tile-health">{blockHp[tileKey] ?? 5} HP</span>}
+                        <span className="tile-glyph">{supplyDrop ? 'D' : isTurret ? 'T' : wallHealth > 0 ? 'W' : tileGlyphs[tile.type]}</span>
+                        {isClaimed && <span className="tile-health">{wallHealth > 0 ? `${wallHealth} HP` : `${blockHp[tileKey] ?? 5} HP`}</span>}
+                        {supplyDrop && <span className="tile-health">+{supplyDrop.amount} {supplyDrop.resource}</span>}
                       </button>
                     );
                   })}
@@ -1385,6 +1672,7 @@ function App() {
               <div className="upgrade-list xp-upgrade-list">
                 <div className="upgrade-row"><div className="upgrade-summary"><strong>Selected turret damage</strong><small>+1 damage · 8 R</small></div><button className="upgrade-option" onClick={() => upgradeSelectedTurret('damage')} disabled={!selectedTurretKey || resources.scavenge < 8}><span>RES</span>8 R</button></div>
                 <div className="upgrade-row"><div className="upgrade-summary"><strong>Selected turret cadence</strong><small>-1 second · 10 R</small></div><button className="upgrade-option" onClick={() => upgradeSelectedTurret('interval')} disabled={!selectedTurretKey || resources.scavenge < 10 || (turretStats[selectedTurretKey ?? '']?.interval ?? turretBlueprint.interval) <= 1}><span>RES</span>10 R</button></div>
+                <div className="upgrade-row"><div className="upgrade-summary"><strong>Remove turret</strong><small>Refund +0.5 Luminae</small></div><button className="upgrade-option xp-option" onClick={removeSelectedTurret} disabled={!selectedTurretKey || gameState !== 'playing' || phase !== 'play'}><span>L</span>+0.5</button></div>
                 <div className="upgrade-row"><div className="upgrade-summary"><strong>Future turret damage</strong><small>+1 damage · 1 Luminae</small></div><button className="upgrade-option xp-option" onClick={() => upgradeFutureTurret('damage')} disabled={resources.luminae < 1}><span>L</span>1 L</button></div>
                 <div className="upgrade-row"><div className="upgrade-summary"><strong>Future turret cadence</strong><small>-1 second · 1 Luminae</small></div><button className="upgrade-option xp-option" onClick={() => upgradeFutureTurret('interval')} disabled={resources.luminae < 1 || turretBlueprint.interval <= 1}><span>L</span>1 L</button></div>
               </div>
@@ -1399,6 +1687,7 @@ function App() {
             <section className="panel" aria-label="Wave forecast and legend">
               <div className="panel-heading"><h2>Wave forecast</h2><Waves size={15} color="hsl(var(--accent))" /></div>
               <div className="forecast"><div className="eyebrow">Next resolution in {nextWaveIn} turn{nextWaveIn === 1 ? '' : 's'} · interval {waveInterval}</div><div className="forecast-track">{Array.from({ length: waveInterval }, (_, index) => <span className={`forecast-segment ${index < turnsSinceWave ? 'active' : ''}`} key={index} />)}</div><div className="forecast-labels"><span>WAVES 1–2: 5T</span><span>3–4: 4T</span><span>5–6: 3T</span></div></div>
+              <div className="forecast"><div className="eyebrow">Next wave plan</div><div className="forecast-labels"><span>{nextWavePlan.drifters} drifter{nextWavePlan.drifters === 1 ? '' : 's'}</span><span>{nextWavePlan.razor ? `${nextWavePlan.razor} razor` : 'no razor'}</span><span>{nextWavePlan.siege ? `${nextWavePlan.siege} siege` : 'no siege'}</span></div></div>
               <div className="legend-list">
                 <div className="legend-item"><span className="legend-glyph" style={{ color: 'hsl(194 75% 68%)' }}>O₂</span> Oxygen reserve</div>
                 <div className="legend-item"><span className="legend-glyph" style={{ color: 'hsl(39 88% 65%)' }}>R</span> Repair material</div>
